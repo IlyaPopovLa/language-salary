@@ -46,7 +46,7 @@ SUPERJOB_API_KEY=ваш_ключ_от_SuperJob
 
 ## 5. Запуск скрипта
 
-```python script.py```
+```python main.py```
 
 ## 6. Вывод
 <img width="1409" height="804" alt="image" src="https://github.com/user-attachments/assets/82d37d5d-62de-4119-a5cf-d96dd93a9eb4" />
