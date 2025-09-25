@@ -1,8 +1,11 @@
 import requests
 import time
-from dotenv import load_dotenv
 import os
+from dotenv import load_dotenv
 from table_utils import print_table
+
+
+SUPERJOB_VACANCIES_PAGE = 20
 
 
 def predict_salary(salary_from, salary_to):
@@ -35,39 +38,45 @@ def predict_rub_salary_hh(vacancy):
     return predict_salary(salary_from, salary_to)
 
 
-def get_stats_hh(languages, area=1):
+def fetch_all_hh_vacancies(language, area=1):
     url = "https://api.hh.ru/vacancies"
+    all_vacancies = []
+
+    params = {
+        'text': f'программист {language}',
+        'area': area,
+        'per_page': 100,
+        'page': 0
+    }
+
+    response = requests.get(url, params=params)
+    if not response.ok:
+        print(f"HH: Ошибка при запросе для {language}: {response.status_code}")
+        return [], 0
+
+    vacancies_page = response.json()
+    all_vacancies += vacancies_page.get('items', [])
+    pages = vacancies_page.get('pages', 0)
+    found = vacancies_page.get('found', 0)
+
+    for page in range(1, pages):
+        params['page'] = page
+        response = requests.get(url, params=params)
+        if not response.ok:
+            break
+        page_data = response.json()
+        all_vacancies += page_data.get('items', [])
+        time.sleep(0.1)
+
+    return all_vacancies, found
+
+
+def get_stats_hh(languages, area=1):
     language_salaries = {}
 
     for lang in languages:
-        salaries = []
-        params = {
-            'text': f'программист {lang}',
-            'area': area,
-            'per_page': 100,
-            'page': 0
-        }
-
-        response = requests.get(url, params=params)
-        if not response.ok:
-            print(f"HH: Ошибка при запросе для {lang}: {response.status_code}")
-            continue
-        vacancies_page = response.json()
-
-        vacancies_found = vacancies_page.get('found', 0)
-        pages = vacancies_page.get('pages', 0)
-
-        salaries += collect_salaries(vacancies_page.get('items', []), predict_rub_salary_hh)
-
-        for page in range(1, pages):
-            params['page'] = page
-            response = requests.get(url, params=params)
-            if not response.ok:
-                break
-            vacancies_page = response.json()
-
-            salaries += collect_salaries(vacancies_page.get('items', []), predict_rub_salary_hh)
-            time.sleep(0.1)
+        vacancies, vacancies_found = fetch_all_hh_vacancies(lang, area)
+        salaries = collect_salaries(vacancies, predict_rub_salary_hh)
 
         average_salary = int(sum(salaries) / len(salaries)) if salaries else 0
 
@@ -76,6 +85,7 @@ def get_stats_hh(languages, area=1):
             "vacancies_processed": len(salaries),
             "average_salary": average_salary
         }
+
     return language_salaries
 
 
@@ -89,57 +99,55 @@ def predict_rub_salary_superjob(vacancy):
     return predict_salary(salary_from, salary_to)
 
 
-def get_stats_superjob(api_key, languages, town_id=4):
-    headers = {
-        'X-Api-App-Id': api_key,
-    }
+def fetch_all_sj_vacancies(api_key, language, town_id=4):
+    headers = {'X-Api-App-Id': api_key}
     url = 'https://api.superjob.ru/2.0/vacancies/'
+    all_vacancies = []
+    page = 0
+    vacancies_found = 0
+
+    while True:
+        params = {
+            'keyword': language,
+            'town': town_id,
+            'count': SUPERJOB_VACANCIES_PAGE,
+            'page': page,
+        }
+        response = requests.get(url, headers=headers, params=params)
+        if not response.ok:
+            print(f"SuperJob: Ошибка при запросе для {language}: {response.status_code}")
+            break
+
+        data = response.json()
+        if page == 0:
+            vacancies_found = data.get('total', 0)
+
+        all_vacancies += data.get('objects', [])
+
+        if not data.get('more', False):
+            break
+
+        page += 1
+        time.sleep(0.2)
+
+    return all_vacancies, vacancies_found
+
+
+def get_stats_superjob(api_key, languages, town_id=4):
     language_salaries = {}
 
-    for language in languages:
-        vacancies_found = 0
-        vacancies_processed = 0
-        total_salary = 0
-        page = 0
+    for lang in languages:
+        vacancies, vacancies_found = fetch_all_sj_vacancies(api_key, lang, town_id)
+        salaries = collect_salaries(vacancies, predict_rub_salary_superjob)
 
-        while True:
-            params = {
-                'keyword': language,
-                'town': town_id,
-                'count': 20,
-                'page': page,
-            }
-            response = requests.get(url, headers=headers, params=params)
-            if not response.ok:
-                print(f"SuperJob: Ошибка при запросе для {language}: {response.status_code}")
-                break
+        average_salary = int(sum(salaries) / len(salaries)) if salaries else 0
 
-            vacancies_page = response.json()
-
-            if page == 0:
-                vacancies_found = vacancies_page.get('total', 0)
-
-            vacancies = vacancies_page.get('objects', [])
-            if not vacancies:
-                break
-
-            salaries = collect_salaries(vacancies, predict_rub_salary_superjob)
-            total_salary += sum(salaries)
-            vacancies_processed += len(salaries)
-
-            if not vacancies_page.get('more', False):
-                break
-
-            page += 1
-            time.sleep(0.2)
-
-        average_salary = int(total_salary / vacancies_processed) if vacancies_processed else 0
-
-        language_salaries[language.lower()] = {
+        language_salaries[lang.lower()] = {
             "vacancies_found": vacancies_found,
-            "vacancies_processed": vacancies_processed,
+            "vacancies_processed": len(salaries),
             "average_salary": average_salary
         }
+
     return language_salaries
 
 
@@ -151,11 +159,12 @@ def main():
         return
 
     languages = ["python", "c", "c#", "c++", "java", "js", "ruby", "go", "1с"]
+
     hh_stats = get_stats_hh(languages)
     superjob_stats = get_stats_superjob(api_key, languages)
 
     print_table('HeadHunter Moscow', hh_stats)
-    print("\n")
+    print()
     print_table('SuperJob Moscow', superjob_stats)
 
 
